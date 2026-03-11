@@ -66,8 +66,8 @@ export default async function handler(event) {
     ↓
 [Hook] Pre-Processor (L1)
     ├── extractKeywords (支持中文 CJK)
-    ├── safeRipgrepSearch (rg/grep 自动降级)
-    ├── searchWeb (Tavily API，本地<3结果时触发)
+    ├── 调用 [Tools] search_local (L2：rg/grep 自动降级)
+    ├── 本地结果不足时调用 [Tools] search_web (L2：Tavily，可选)
     └── 合并注入 Grounding Context
     ↓
 LLM 生成响应
@@ -75,6 +75,7 @@ LLM 生成响应
 [Hook] Post-Processor (L3)
     ├── 解析 [Source] 和 [Confidence]
     ├── 验证本地文件存在性
+    ├── （可选）调用 [Tools] verify_fact (L2：轻量一致性校验)
     └── 出站审计：发送后追加告警（不篡改原回复）
     ↓
 返回给用户（建议带 [Source] 和 [Confidence]）
