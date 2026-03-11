@@ -1,0 +1,26 @@
+{
+  "preProcessor": {
+    "enabled": true,
+    "searchPaths": [
+      "~/.openclaw/",
+      "~/.openclaw/workspace/"
+    ],
+    "maxResults": 10,
+    "relevanceThreshold": 0.6,
+    "enableVectorSearch": false,
+    "maxInputSize": 10000,
+    "maxKeywords": 5,
+    "enableWebSearch": true,
+    "webSearchThreshold": 3,
+    "maxWebResults": 5
+  },
+  "postProcessor": {
+    "enabled": true,
+    "requireSource": true,
+    "requireConfidence": true,
+    "onMissing": "auto-fix",
+    "maxContentSize": 100000,
+    "enableFactVerification": true,
+    "factVerificationThreshold": 0.5
+  }
+}

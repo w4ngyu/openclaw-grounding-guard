@@ -1,0 +1,24 @@
+{
+  "name": "openclaw-grounding-guard",
+  "version": "1.3.0",
+  "description": "Grounding Guard hooks for OpenClaw (local context injection + outbound annotation auditing).",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "openclaw": {
+    "hooks": [
+      "./src/hooks/grounding-pre-processor",
+      "./src/hooks/grounding-post-processor"
+    ]
+  },
+  "files": [
+    "src/",
+    "config/",
+    "docs/",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ]
+}
