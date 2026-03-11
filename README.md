@@ -6,7 +6,7 @@
 
 ## 核心特性
 
-- **两层架构**: Pre-Processor（注入上下文）→ Post-Processor（出站审计/告警）
+- **三层架构**: L1 Pre-Processor（注入上下文）→ L2 Tools（搜索/校验）→ L3 Post-Processor（出站审计/告警）
 - **四级置信度**: high (本地) / medium (网络) / low (LLM) / unknown
 - **中文支持**: 完整的中文关键词提取和搜索（CJK 字符）
 - **自动降级**: ripgrep 不可用时自动使用 grep
@@ -132,7 +132,9 @@ src/
 │   │   └── handler.js      # L1: 输入预处理 (ES Module)
 │   └── grounding-post-processor/
 │       ├── HOOK.md
-│       └── handler.js      # L2: 出站审计/告警 (ES Module)
+│       └── handler.js      # L3: 出站审计/告警 (ES Module)
+├── tools/
+│   └── grounding-tools.cjs  # L2: 工具函数封装（search_local/search_web/verify_fact）
 ├── utils/
 │   └── security.cjs        # 安全工具模块 (CommonJS)
 
