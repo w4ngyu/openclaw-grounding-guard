@@ -22,6 +22,14 @@ const {
   verifyFact,
 } = utils;
 
+const tools = (() => {
+  try {
+    return require('../../tools/grounding-tools.cjs');
+  } catch {
+    return null;
+  }
+})();
+
 // 配置接口
 const DEFAULT_CONFIG = {
   enabled: true,
@@ -166,7 +174,9 @@ async function performFactVerification(content, sources, threshold) {
   }
 
   const sourcePaths = localSources.map(s => s.value);
-  const verification = await verifyFact(content, sourcePaths);
+  const verification = tools && typeof tools.verify_fact === 'function'
+    ? await tools.verify_fact({ statement: content, sources: sourcePaths })
+    : await verifyFact(content, sourcePaths);
 
   const details = [
     `Fact verification: ${verification.isVerified ? 'PASSED' : 'FAILED'}`,

@@ -18,10 +18,7 @@ const utils = (() => {
   }
 })();
 const {
-  safeRipgrepSearch,
-  calculateRelevance,
   extractKeywords,
-  searchWeb,
   validatePath,
   deepMerge,
   DEFAULT_MAX_RESULTS,
@@ -31,6 +28,14 @@ const {
   CONCURRENCY_LIMIT,
   CONTENT_TRUNCATE_LENGTH,
 } = utils;
+
+const tools = (() => {
+  try {
+    return require('../../tools/grounding-tools.cjs');
+  } catch {
+    return null;
+  }
+})();
 
 // 配置接口
 const DEFAULT_CONFIG = {
@@ -78,38 +83,19 @@ function getConfig() {
   return deepMerge(DEFAULT_CONFIG, user.preProcessor || user || {});
 }
 
-// 搜索本地文件
 async function searchLocalFiles(keywords, config) {
-  const allResults = [];
-
-  for (const searchPath of config.searchPaths) {
-    const validation = validatePath(searchPath, config.allowedBasePaths || DEFAULT_CONFIG.allowedBasePaths);
-    if (!validation.isValid) continue;
-    const resolvedSearchPath = validation.resolvedPath;
-
-    const batchPromises = keywords.map(async (keyword) => {
-      const raw = await safeRipgrepSearch(keyword, resolvedSearchPath, config.maxResults, 10000);
-      return raw.map((r) => ({ ...r, relevanceScore: calculateRelevance(r.content, keyword) }));
-    });
-
-    const batchResults = await Promise.all(batchPromises);
-    allResults.push(...batchResults.flat());
+  if (!tools || typeof tools.search_local !== 'function') {
+    throw new Error('L2 tools not available (grounding-tools.cjs missing)');
   }
 
-  // 去重、排序、截断
-  const uniqueResults = new Map();
-  for (const result of allResults) {
-    const key = `${result.filePath}:${result.lineNumber}`;
-    const existing = uniqueResults.get(key);
-    if (!existing || existing.relevanceScore < result.relevanceScore) {
-      uniqueResults.set(key, result);
-    }
-  }
-
-  return Array.from(uniqueResults.values())
-    .filter(r => r.relevanceScore >= config.relevanceThreshold)
-    .sort((a, b) => b.relevanceScore - a.relevanceScore)
-    .slice(0, config.maxResults);
+  return tools.search_local({
+    keywords,
+    searchPaths: config.searchPaths,
+    allowedBasePaths: config.allowedBasePaths || DEFAULT_CONFIG.allowedBasePaths,
+    maxResults: config.maxResults,
+    timeoutMs: 10000,
+    relevanceThreshold: config.relevanceThreshold,
+  });
 }
 
 // 构建 Grounding Context
@@ -222,11 +208,13 @@ export default async function handler(event) {
     // 4. 如果本地结果不足且启用了网络搜索，自动触发网络搜索
     if (config.enableWebSearch && results.length < config.webSearchThreshold) {
       const webQuery = message.slice(0, 200);
-      const webResults = await searchWeb(webQuery, config.maxWebResults);
+      if (tools && typeof tools.search_web === 'function') {
+        const webResults = await tools.search_web({ query: webQuery, maxResults: config.maxWebResults });
 
-      if (webResults.results.length > 0) {
-        const webContext = buildWebGroundingContext(webResults.results);
-        groundingContext += webContext;
+        if (webResults.results.length > 0) {
+          const webContext = buildWebGroundingContext(webResults.results);
+          groundingContext += webContext;
+        }
       }
     }
 
