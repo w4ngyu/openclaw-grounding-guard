@@ -1,7 +1,13 @@
 {
   "preProcessor": {
     "enabled": true,
+    "version": "3.1.0",
+    "executionMode": "balanced",
     "searchPaths": [
+      "~/.openclaw/",
+      "~/.openclaw/workspace/"
+    ],
+    "allowedBasePaths": [
       "~/.openclaw/",
       "~/.openclaw/workspace/"
     ],
@@ -10,17 +16,30 @@
     "enableVectorSearch": false,
     "maxInputSize": 10000,
     "maxKeywords": 5,
+    "maxContextChars": 6000,
     "enableWebSearch": true,
     "webSearchThreshold": 3,
-    "maxWebResults": 5
+    "maxWebResults": 5,
+    "emitDiagnostics": true,
+    "checkpointEnabled": true,
+    "webCircuitBreakerFailureThreshold": 3,
+    "webCircuitBreakerCooldownMs": 300000
   },
   "postProcessor": {
     "enabled": true,
+    "version": "3.1.0",
+    "allowedBasePaths": [
+      "~/.openclaw/",
+      "~/.openclaw/workspace/"
+    ],
     "requireSource": true,
     "requireConfidence": true,
-    "onMissing": "auto-fix",
+    "onMissing": "warn",
     "maxContentSize": 100000,
     "enableFactVerification": true,
-    "factVerificationThreshold": 0.5
+    "factVerificationThreshold": 0.5,
+    "emitAuditMessage": true,
+    "evaluatorEnabled": true,
+    "minAuditScore": 70
   }
 }

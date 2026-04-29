@@ -1,6 +1,6 @@
 ---
 name: grounding-post-processor
-version: "1.3.0"
+version: "3.1.0"
 description: 出站审计：检查来源/置信度标注并追加告警
 entry: handler.js
 metadata:

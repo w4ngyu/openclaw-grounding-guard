@@ -1,6 +1,6 @@
 ---
 name: grounding-pre-processor
-version: "1.3.0"
+version: "3.1.0"
 description: 自动搜索本地内容并注入 Grounding Context
 entry: handler.js
 metadata:

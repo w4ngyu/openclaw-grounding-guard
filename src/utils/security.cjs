@@ -254,7 +254,7 @@ function extractKeywords(text, options = {}) {
     .map(([word]) => word);
 }
 
-async function verifyFact(statement, sources) {
+async function verifyFact(statement, sources, options = {}) {
   if (!statement || String(statement).length > 5000) {
     throw new Error('Invalid statement: must be non-empty and less than 5000 characters');
   }
@@ -295,7 +295,12 @@ async function verifyFact(statement, sources) {
       }
 
       const expandedPath = expandHome(String(source));
-      const validation = validatePath(expandedPath, ['~/.openclaw', '~/.openclaw/workspace', './', os.homedir()]);
+      const validation = validatePath(
+        expandedPath,
+        Array.isArray(options.allowedBasePaths) && options.allowedBasePaths.length > 0
+          ? options.allowedBasePaths
+          : ['~/.openclaw', '~/.openclaw/workspace']
+      );
       if (!validation.isValid) {
         conflictingInfo.push(`Path not allowed: ${source}`);
         continue;
@@ -357,4 +362,3 @@ module.exports = {
   verifyFact,
   extractKeywords,
 };
-

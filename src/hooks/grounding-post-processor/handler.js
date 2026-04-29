@@ -33,13 +33,18 @@ const tools = (() => {
 // 配置接口
 const DEFAULT_CONFIG = {
   enabled: true,
+  version: '3.1.0',
   configPath: '~/.openclaw/grounding-guard.json',
+  allowedBasePaths: ['~/.openclaw/', '~/.openclaw/workspace/'],
   requireSource: true,
   requireConfidence: true,
-  onMissing: 'auto-fix',
+  onMissing: 'warn',
   maxContentSize: 100000,
   enableFactVerification: true,
-  factVerificationThreshold: 0.5
+  factVerificationThreshold: 0.5,
+  emitAuditMessage: true,
+  evaluatorEnabled: true,
+  minAuditScore: 70
 };
 
 function expandHome(p) {
@@ -118,28 +123,28 @@ async function validateLocalSource(sourcePath) {
 }
 
 // 验证响应
-async function validateResponse(content) {
+async function validateResponse(content, config) {
   const sources = parseSourceAnnotations(content);
   const confidence = parseConfidenceAnnotation(content);
   const issues = [];
 
   // 验证来源
-  if (sources.length === 0) {
-    issues.push('Missing [Source: ...] annotation');
+  if (config.requireSource && sources.length === 0) {
+    issues.push('GG-SRC-001 Missing [Source: ...] annotation');
   } else {
     for (const source of sources) {
       if (source.type === 'local') {
         source.isValid = await validateLocalSource(source.value);
         if (!source.isValid) {
-          issues.push(`Source file does not exist: ${source.value}`);
+          issues.push(`GG-SRC-002 Source file does not exist: ${source.value}`);
         }
       }
     }
   }
 
   // 验证置信度
-  if (!confidence) {
-    issues.push('Missing [Confidence: high/medium/low/unknown] annotation');
+  if (config.requireConfidence && !confidence) {
+    issues.push('GG-CFG-001 Missing [Confidence: high/medium/low/unknown] annotation');
   }
 
   // 检查置信度与来源是否匹配
@@ -148,11 +153,11 @@ async function validateResponse(content) {
     const hasWebSource = sources.some(s => s.type === 'web');
 
     if (hasLocalSource && confidence.level !== 'high') {
-      issues.push('Local sources should have [Confidence: high]');
+      issues.push('GG-CFG-002 Local sources should have [Confidence: high]');
     } else if (hasWebSource && confidence.level === 'high') {
-      issues.push('Web sources should have [Confidence: medium] or lower');
+      issues.push('GG-CFG-003 Web sources should have [Confidence: medium] or lower');
     } else if (!hasLocalSource && !hasWebSource && confidence.level !== 'low' && confidence.level !== 'unknown') {
-      issues.push('LLM-only knowledge should have [Confidence: low] or [Confidence: unknown]');
+      issues.push('GG-CFG-004 LLM-only knowledge should have [Confidence: low] or [Confidence: unknown]');
     }
   }
 
@@ -166,7 +171,7 @@ async function validateResponse(content) {
 }
 
 // 深度事实验证
-async function performFactVerification(content, sources, threshold) {
+async function performFactVerification(content, sources, threshold, allowedBasePaths) {
   const localSources = sources.filter(s => s.type === 'local' && s.isValid);
   
   if (localSources.length === 0) {
@@ -175,7 +180,7 @@ async function performFactVerification(content, sources, threshold) {
 
   const sourcePaths = localSources.map(s => s.value);
   const verification = tools && typeof tools.verify_fact === 'function'
-    ? await tools.verify_fact({ statement: content, sources: sourcePaths })
+    ? await tools.verify_fact({ statement: content, sources: sourcePaths, allowedBasePaths })
     : await verifyFact(content, sourcePaths);
 
   const details = [
@@ -213,9 +218,25 @@ function generateRejectionMessage(issues) {
 
 // 生成警告消息
 function generateWarningMessage(issues) {
+  const now = new Date().toISOString();
   return `\n\n---\n` +
-         `⚠️ **Grounding Warning**: ${issues.join(', ')}\n` +
+         `⚠️ **Grounding Warning** (${now}): ${issues.join(', ')}\n` +
          `*此响应未完全通过来源验证*`;
+}
+
+function evaluateResponse(validation, factCheckFailed, config) {
+  const grades = {
+    sourcePresence: validation.hasSource ? 100 : 0,
+    confidencePresence: validation.hasConfidence ? 100 : 0,
+    sourceValidity: validation.sources.filter((source) => source.type !== 'local' || source.isValid).length > 0 ? 100 : 60,
+    consistency: factCheckFailed ? 40 : 100,
+  };
+  const score = Math.round((grades.sourcePresence * 0.3) +
+    (grades.confidencePresence * 0.2) +
+    (grades.sourceValidity * 0.2) +
+    (grades.consistency * 0.3));
+  const verdict = score >= config.minAuditScore ? 'pass' : 'fail';
+  return { grades, score, verdict };
 }
 
 // OpenClaw 官方 handler 格式
@@ -246,15 +267,33 @@ export default async function handler(event) {
   }
 
   // 验证响应
-  const validation = await validateResponse(content);
+  const validation = await validateResponse(content, config);
+  let factCheckFailed = false;
 
   // 深度事实验证（如果启用且有本地来源）
   if (config.enableFactVerification && validation.sources.some(s => s.type === 'local')) {
-    const factCheck = await performFactVerification(content, validation.sources, config.factVerificationThreshold);
+    const factCheck = await performFactVerification(
+      content,
+      validation.sources,
+      config.factVerificationThreshold,
+      config.allowedBasePaths
+    );
     
     if (!factCheck.verified) {
+      factCheckFailed = true;
       validation.issues.push(`Fact verification failed: ${factCheck.details.join('; ')}`);
     }
+  }
+
+  if (!event.context) event.context = {};
+  if (config.evaluatorEnabled) {
+    event.context.groundingAudit = {
+      version: config.version,
+      timestamp: new Date().toISOString(),
+      checkpoint: event.context.groundingCheckpoint || null,
+      evaluation: evaluateResponse(validation, factCheckFailed, config),
+      issues: validation.issues,
+    };
   }
 
   // 如果没有问题，直接返回
@@ -263,7 +302,12 @@ export default async function handler(event) {
   }
 
   // Hook 层的通用做法：追加一条告警消息（不篡改已发送内容）
+  if (!config.emitAuditMessage || config.onMissing === 'silent') return;
+
   const warning = generateWarningMessage(validation.issues);
   if (!Array.isArray(event.messages)) event.messages = [];
-  event.messages.push(warning);
+  const exists = event.messages.some((item) => String(item || '').includes('Grounding Warning'));
+  if (!exists) {
+    event.messages.push(warning);
+  }
 }

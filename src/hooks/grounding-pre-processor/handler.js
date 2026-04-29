@@ -19,13 +19,11 @@ const utils = (() => {
 })();
 const {
   extractKeywords,
-  validatePath,
   deepMerge,
   DEFAULT_MAX_RESULTS,
   DEFAULT_RELEVANCE_THRESHOLD,
   DEFAULT_MAX_INPUT_SIZE,
   DEFAULT_MAX_KEYWORDS,
-  CONCURRENCY_LIMIT,
   CONTENT_TRUNCATE_LENGTH,
 } = utils;
 
@@ -40,6 +38,8 @@ const tools = (() => {
 // 配置接口
 const DEFAULT_CONFIG = {
   enabled: true,
+  version: '3.1.0',
+  executionMode: 'balanced',
   configPath: '~/.openclaw/grounding-guard.json',
   allowedBasePaths: [
     '~/.openclaw/',
@@ -54,9 +54,19 @@ const DEFAULT_CONFIG = {
   enableVectorSearch: false,
   maxInputSize: DEFAULT_MAX_INPUT_SIZE,
   maxKeywords: DEFAULT_MAX_KEYWORDS,
+  maxContextChars: 6000,
   enableWebSearch: true,
   webSearchThreshold: 3,
-  maxWebResults: 5
+  maxWebResults: 5,
+  emitDiagnostics: true,
+  checkpointEnabled: true,
+  webCircuitBreakerFailureThreshold: 3,
+  webCircuitBreakerCooldownMs: 300000
+};
+
+const webCircuitState = {
+  failures: 0,
+  openedAtMs: 0,
 };
 
 function expandHome(p) {
@@ -80,12 +90,79 @@ function loadUserConfig(configPath) {
 
 function getConfig() {
   const user = loadUserConfig(DEFAULT_CONFIG.configPath);
-  return deepMerge(DEFAULT_CONFIG, user.preProcessor || user || {});
+  return applyExecutionMode(deepMerge(DEFAULT_CONFIG, user.preProcessor || user || {}));
+}
+
+function applyExecutionMode(config) {
+  const mode = String(config.executionMode || 'balanced').toLowerCase();
+  if (mode === 'strict') {
+    return {
+      ...config,
+      maxResults: Math.min(config.maxResults, 8),
+      maxKeywords: Math.min(config.maxKeywords, 4),
+      maxContextChars: Math.min(config.maxContextChars, 5000),
+      enableWebSearch: Boolean(config.enableWebSearchStrictMode),
+      maxWebResults: Math.min(config.maxWebResults, 3),
+    };
+  }
+
+  if (mode === 'performance') {
+    return {
+      ...config,
+      maxResults: Math.min(config.maxResults, 6),
+      maxKeywords: Math.min(config.maxKeywords, 3),
+      maxContextChars: Math.min(config.maxContextChars, 3500),
+      webSearchThreshold: Math.min(config.webSearchThreshold, 2),
+      maxWebResults: Math.min(config.maxWebResults, 3),
+    };
+  }
+
+  return config;
+}
+
+function quickHash(input) {
+  let hash = 0;
+  const text = String(input || '');
+  for (let index = 0; index < text.length; index += 1) {
+    hash = ((hash << 5) - hash) + text.charCodeAt(index);
+    hash |= 0;
+  }
+  return Math.abs(hash).toString(16);
+}
+
+function getRunId(event, message) {
+  const seed = `${event?.context?.turnId || ''}:${event?.context?.sessionId || ''}:${message.slice(0, 256)}`;
+  return `gg-${quickHash(seed)}`;
+}
+
+function isWebSearchAllowed(config) {
+  if (!config.enableWebSearch) return false;
+  if (webCircuitState.failures < config.webCircuitBreakerFailureThreshold) return true;
+  const now = Date.now();
+  if (now - webCircuitState.openedAtMs >= config.webCircuitBreakerCooldownMs) {
+    webCircuitState.failures = 0;
+    webCircuitState.openedAtMs = 0;
+    return true;
+  }
+  return false;
+}
+
+function markWebSearchResult(ok, config) {
+  if (ok) {
+    webCircuitState.failures = 0;
+    webCircuitState.openedAtMs = 0;
+    return;
+  }
+  webCircuitState.failures += 1;
+  if (webCircuitState.failures >= config.webCircuitBreakerFailureThreshold) {
+    webCircuitState.openedAtMs = Date.now();
+  }
 }
 
 async function searchLocalFiles(keywords, config) {
   if (!tools || typeof tools.search_local !== 'function') {
-    throw new Error('L2 tools not available (grounding-tools.cjs missing)');
+    console.warn('[grounding-pre-processor] L2 tools unavailable, skip local search.');
+    return [];
   }
 
   return tools.search_local({
@@ -99,38 +176,48 @@ async function searchLocalFiles(keywords, config) {
 }
 
 // 构建 Grounding Context
-function buildGroundingContext(results) {
+function buildGroundingContext(results, maxContextChars) {
   if (results.length === 0) {
     return '';
   }
 
+  let remaining = Number.isFinite(maxContextChars) ? Math.max(maxContextChars, 0) : 6000;
   const sections = results.map(r => {
-    return `### 来源: ${r.filePath} (相关度: ${(r.relevanceScore * 100).toFixed(0)}%)\n` +
-           `第 ${r.lineNumber} 行:\n` +
-           '```\n' +
-           r.content.substring(0, CONTENT_TRUNCATE_LENGTH) +
-           (r.content.length > CONTENT_TRUNCATE_LENGTH ? '\n... (truncated)' : '') +
-           '\n```';
-  });
+    if (remaining <= 0) return null;
+    const content = r.content.substring(0, Math.min(CONTENT_TRUNCATE_LENGTH, Math.max(remaining - 180, 80)));
+    const section = `### 来源: ${r.filePath} (相关度: ${(r.relevanceScore * 100).toFixed(0)}%)\n` +
+      `第 ${r.lineNumber} 行:\n` +
+      '```\n' +
+      content +
+      (r.content.length > content.length ? '\n... (truncated)' : '') +
+      '\n```';
+    remaining -= section.length;
+    return section;
+  }).filter(Boolean);
 
   return `\n### 📁 本地来源（高置信度）\n\n` +
          `${sections.join('\n\n')}`;
 }
 
 // 构建网络搜索 Grounding Context
-function buildWebGroundingContext(results) {
+function buildWebGroundingContext(results, maxContextChars) {
   if (results.length === 0) {
     return '';
   }
 
+  let remaining = Number.isFinite(maxContextChars) ? Math.max(maxContextChars, 0) : 2500;
   const sections = results.map(r => {
-    return `### 来源: ${r.title} (${r.source})\n` +
-           `URL: ${r.url}\n` +
-           '```\n' +
-           r.snippet.substring(0, CONTENT_TRUNCATE_LENGTH) +
-           (r.snippet.length > CONTENT_TRUNCATE_LENGTH ? '\n... (truncated)' : '') +
-           '\n```';
-  });
+    if (remaining <= 0) return null;
+    const snippet = r.snippet.substring(0, Math.min(CONTENT_TRUNCATE_LENGTH, Math.max(remaining - 220, 80)));
+    const section = `### 来源: ${r.title} (${r.source})\n` +
+      `URL: ${r.url}\n` +
+      '```\n' +
+      snippet +
+      (r.snippet.length > snippet.length ? '\n... (truncated)' : '') +
+      '\n```';
+    remaining -= section.length;
+    return section;
+  }).filter(Boolean);
 
   return `\n### 🌐 网络来源（中置信度）\n\n` +
          `${sections.join('\n\n')}`;
@@ -183,6 +270,7 @@ export default async function handler(event) {
       (event.context && (event.context.content || event.context.bodyForAgent)) ||
       (event.data && event.data.message) ||
       '';
+    const runId = getRunId(event, message);
 
     // 如果消息为空或太长，跳过
     if (!message || message.length > config.maxInputSize) {
@@ -203,17 +291,23 @@ export default async function handler(event) {
     const results = await searchLocalFiles(keywords, config);
 
     // 3. 构建本地上下文
-    let groundingContext = buildGroundingContext(results);
+    let groundingContext = buildGroundingContext(results, config.maxContextChars);
 
     // 4. 如果本地结果不足且启用了网络搜索，自动触发网络搜索
-    if (config.enableWebSearch && results.length < config.webSearchThreshold) {
+    if (isWebSearchAllowed(config) && results.length < config.webSearchThreshold) {
       const webQuery = message.slice(0, 200);
       if (tools && typeof tools.search_web === 'function') {
-        const webResults = await tools.search_web({ query: webQuery, maxResults: config.maxWebResults });
-
-        if (webResults.results.length > 0) {
-          const webContext = buildWebGroundingContext(webResults.results);
-          groundingContext += webContext;
+        try {
+          const webResults = await tools.search_web({ query: webQuery, maxResults: config.maxWebResults });
+          if (webResults.results.length > 0) {
+            const webContext = buildWebGroundingContext(webResults.results, Math.floor(config.maxContextChars * 0.45));
+            groundingContext += webContext;
+            markWebSearchResult(true, config);
+          } else {
+            markWebSearchResult(false, config);
+          }
+        } catch {
+          markWebSearchResult(false, config);
         }
       }
     }
@@ -234,6 +328,27 @@ export default async function handler(event) {
     // 添加标记表示已处理
     event.context.groundingContextInjected = true;
     event.context.groundingSourcesCount = results.length;
+    if (config.emitDiagnostics) {
+      event.context.groundingDiagnostics = {
+        version: config.version,
+        executionMode: config.executionMode,
+        runId,
+        phase: 'preprocessed',
+        maxResults: config.maxResults,
+        maxKeywords: config.maxKeywords,
+        webSearchEnabled: config.enableWebSearch,
+        webCircuitOpen: webCircuitState.failures >= config.webCircuitBreakerFailureThreshold,
+      };
+    }
+    if (config.checkpointEnabled) {
+      event.context.groundingCheckpoint = {
+        runId,
+        phase: 'L1_COMPLETE',
+        sourceHits: results.length,
+        contextChars: groundingContext.length,
+        timestamp: new Date().toISOString(),
+      };
+    }
   }
   catch (error) {
     console.error('[Grounding Pre-Processor] Error:', error);

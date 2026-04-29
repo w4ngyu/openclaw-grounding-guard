@@ -12,6 +12,8 @@ const {
 async function searchLocal({ query, keywords, searchPaths, allowedBasePaths, maxResults, timeoutMs, relevanceThreshold }) {
   const kw = Array.isArray(keywords) ? keywords : extractKeywords(String(query || ''), { maxKeywords: 5 });
   const paths = Array.isArray(searchPaths) ? searchPaths : [];
+  const concurrency = 3;
+  const tasks = [];
   const results = [];
 
   for (const searchPath of paths) {
@@ -20,15 +22,21 @@ async function searchLocal({ query, keywords, searchPaths, allowedBasePaths, max
     const resolvedSearchPath = validation.resolvedPath;
 
     for (const keyword of kw) {
-      const raw = await safeRipgrepSearch(keyword, resolvedSearchPath, maxResults || 10, timeoutMs || 10000);
-      for (const r of raw) {
-        results.push({
-          ...r,
-          keyword,
-          relevanceScore: calculateRelevance(r.content, keyword),
-        });
-      }
+      tasks.push({ keyword, resolvedSearchPath });
     }
+  }
+
+  for (let index = 0; index < tasks.length; index += concurrency) {
+    const batch = tasks.slice(index, index + concurrency);
+    const batchResults = await Promise.all(batch.map(async ({ keyword, resolvedSearchPath }) => {
+      const raw = await safeRipgrepSearch(keyword, resolvedSearchPath, maxResults || 10, timeoutMs || 10000);
+      return raw.map((r) => ({
+        ...r,
+        keyword,
+        relevanceScore: calculateRelevance(r.content, keyword),
+      }));
+    }));
+    results.push(...batchResults.flat());
   }
 
   const unique = new Map();
@@ -48,8 +56,12 @@ async function searchWebTool({ query, maxResults }) {
   return searchWeb(String(query || ''), maxResults || 5);
 }
 
-async function verifyFactTool({ statement, sources }) {
-  return verifyFact(String(statement || ''), Array.isArray(sources) ? sources : []);
+async function verifyFactTool({ statement, sources, allowedBasePaths }) {
+  return verifyFact(
+    String(statement || ''),
+    Array.isArray(sources) ? sources : [],
+    { allowedBasePaths: Array.isArray(allowedBasePaths) ? allowedBasePaths : undefined }
+  );
 }
 
 module.exports = {
@@ -57,4 +69,3 @@ module.exports = {
   search_web: searchWebTool,
   verify_fact: verifyFactTool,
 };
-
