@@ -494,6 +494,7 @@ private struct DecisionAnswerCard: View {
 struct DecisionHomeView: View {
     @StateObject private var model = DecisionViewModel()
     @State private var showRaw = false
+    @State private var showImport = false
 
     var body: some View {
         NavigationStack {
@@ -534,6 +535,12 @@ struct DecisionHomeView: View {
                             Text("02  决策问题")
                                 .font(.headline)
                             Spacer()
+                            Button {
+                                showImport = true
+                            } label: {
+                                Label("导入 JSON", systemImage: "square.and.arrow.down")
+                            }
+                            .font(.subheadline)
                             Menu {
                                 Button("选择题 · Choice", systemImage: "list.bullet.circle") { model.addQuestion(.choice) }
                                 Button("是非题 · Noul", systemImage: "checkmark.circle") { model.addQuestion(.noul) }
@@ -543,6 +550,12 @@ struct DecisionHomeView: View {
                             }
                             .disabled(model.draft.questions.count >= 8)
                         }
+                        Button {
+                            model.copyCurrentDocumentJSON()
+                        } label: {
+                            Label("复制当前题目 JSON", systemImage: "doc.on.doc")
+                        }
+                        .font(.subheadline)
                         ForEach(Array(model.draft.questions.indices), id: \.self) { index in
                             DecisionQuestionEditor(question: $model.draft.questions[index], index: index) {
                                 let id = model.draft.questions[index].id
@@ -619,6 +632,11 @@ struct DecisionHomeView: View {
             .navigationTitle("Laya 决策")
             .navigationBarTitleDisplayMode(.inline)
             .task { model.loadModel() }
+            .sheet(isPresented: $showImport) {
+                DecisionDocumentImportView { document in
+                    model.applyImportedDocument(document)
+                }
+            }
         }
     }
 }
