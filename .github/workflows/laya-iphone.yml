@@ -20,6 +20,10 @@ jobs:
       CARGO_TERM_COLOR: always
       HF_HUB_DISABLE_PROGRESS_BARS: '1'
     steps:
+      - name: Verify Apple build environment
+        run: |
+          xcodebuild -version
+          xcrun --show-sdk-path --sdk iphoneos
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
