@@ -1,0 +1,42 @@
+name: ValenDecision
+options:
+  bundleIdPrefix: io.github.w4ngyu
+  deploymentTarget:
+    iOS: "18.0"
+  xcodeVersion: "16.0"
+targets:
+  ValenDecision:
+    type: application
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: App
+      - path: Bridge
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Valen Decision
+        UILaunchScreen: {}
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        NSPhotoLibraryUsageDescription: "Choose photos for completely offline on-device AI decisions."
+        UIRequiredDeviceCapabilities:
+          - arm64
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        LSSupportsOpeningDocumentsInPlace: true
+        UIFileSharingEnabled: true
+    settings:
+      base:
+        SWIFT_VERSION: "5.9"
+        IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.w4ngyu.ValenDecision4B
+        SWIFT_OBJC_BRIDGING_HEADER: "$(SRCROOT)/Bridge/ValenBridge.h"
+        CLANG_CXX_LANGUAGE_STANDARD: "gnu++17"
+        CLANG_CXX_LIBRARY: libc++
+        LIBRARY_SEARCH_PATHS: "$(SRCROOT)/Engine"
+        OTHER_LDFLAGS: "$(inherited) -lValenEngine -lc++ -lz -framework Metal -framework MetalKit -framework Accelerate -framework Foundation -framework CoreGraphics -framework Security -framework SystemConfiguration -framework Network"
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_HARDENED_RUNTIME: NO
