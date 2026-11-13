@@ -57,6 +57,17 @@ jobs:
           s = p.read_text()
           assert before in s, "upstream signal handler anchor moved; refusing blind patch"
           p.write_text(s.replace(before, after, 1))
+          cmake_file = Path(src.read_text().strip()) / "tools/server/CMakeLists.txt"
+          cmake_text = cmake_file.read_text()
+          installer = "install(TARGETS ${TARGET} RUNTIME)"
+          assert installer in cmake_text, "llama-server install anchor missing"
+          cmake_file.write_text(cmake_text.replace(
+              installer,
+              'if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")\\n'
+              '  install(TARGETS ${TARGET} RUNTIME)\\n'
+              'endif()',
+              1
+          ))
           PY
       - name: Compile full Valen decision server engine for arm64 iOS
         shell: bash
@@ -76,6 +87,7 @@ jobs:
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_EXAMPLES=OFF \
             -DLLAMA_BUILD_APP=OFF \
+            -DLLAMA_TOOLS_INSTALL=OFF \
             -DLLAMA_BUILD_UI=OFF \
             -DLLAMA_USE_PREBUILT_UI=OFF \
             -DLLAMA_CONNECT=OFF \
@@ -90,7 +102,8 @@ jobs:
           find "$RUNNER_TEMP/valen-ios-build" -name '*.a' -type f -print | sort > "$RUNNER_TEMP/valen-libraries.txt"
           cat "$RUNNER_TEMP/valen-libraries.txt"
           test -s "$RUNNER_TEMP/valen-libraries.txt"
-          mapfile -t archives < "$RUNNER_TEMP/valen-libraries.txt"
+          archives=()
+          while IFS= read -r archive; do archives+=("$archive"); done < "$RUNNER_TEMP/valen-libraries.txt"
           libtool -static -o valen-ios/Engine/libValenEngine.a "${archives[@]}"
           ls -lh valen-ios/Engine/libValenEngine.a
       - name: Generate native SwiftUI app project
