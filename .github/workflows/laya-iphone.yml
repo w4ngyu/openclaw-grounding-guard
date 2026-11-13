@@ -21,6 +21,11 @@ jobs:
       CARGO_TERM_COLOR: always
       HF_HUB_DISABLE_PROGRESS_BARS: '1'
     steps:
+      - uses: actions/checkout@v4
+      - name: Verify repo source files
+        run: |
+          test -s laya-ios/Sources/LayaDemoApp.swift
+          test -f laya-ios/docs/design.md
       - name: Verify Apple build environment
         run: |
           xcodebuild -version
