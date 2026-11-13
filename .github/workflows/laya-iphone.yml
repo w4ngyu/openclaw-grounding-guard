@@ -1,0 +1,91 @@
+name: Build Laya Multilingual iPhone IPA
+
+on:
+  push:
+    branches:
+      - laya-iphone-build-20261113
+    paths:
+      - .github/workflows/laya-iphone.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-iphone-ipa:
+    runs-on: macos-26
+    timeout-minutes: 240
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_TERM_COLOR: always
+      HF_HUB_DISABLE_PROGRESS_BARS: '1'
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Set up Rust and Apple targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim
+      - name: Install XcodeGen and Hugging Face downloader
+        run: |
+          brew install xcodegen
+          python -m pip install 'huggingface_hub[cli]>=1.0,<2.0'
+      - name: Check out the upstream iOS demo
+        run: |
+          git clone https://github.com/TJamesWilliams/laya-r-mlx.git laya
+          cd laya
+          git checkout 914c9a76fd6bd211fc0be043869a5cf1dde1994b
+          git rev-parse HEAD
+      - name: Compile native Rust iOS XCFramework
+        working-directory: laya
+        run: |
+          chmod +x scripts/build-xcframework.sh
+          scripts/build-xcframework.sh
+      - name: Download and bundle multilingual checkpoint
+        working-directory: laya
+        run: |
+          hf download convaiinnovations/laya --include 'multilingual/*'
+          chmod +x scripts/prepare-demo-model.sh
+          scripts/prepare-demo-model.sh multilingual
+          test -s swift/LayaDemo/Model/model.safetensors
+          test -f swift/LayaDemo/Model/rl_agent_config.json
+          du -sh swift/LayaDemo/Model
+      - name: Generate native SwiftUI iOS project
+        working-directory: laya/swift/LayaDemo
+        run: xcodegen generate
+      - name: Build unsigned iPhone app
+        working-directory: laya
+        run: |
+          xcodebuild \
+            -project swift/LayaDemo/LayaDemo.xcodeproj \
+            -scheme LayaDemo \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/laya-derived-data" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY='' \
+            build
+      - name: Package and validate unsigned IPA
+        run: |
+          APP="$RUNNER_TEMP/laya-derived-data/Build/Products/Release-iphoneos/LayaDemo.app"
+          test -d "$APP"
+          test -f "$APP/Model/rl_agent_config.json"
+          test -s "$APP/Model/model.safetensors"
+          test -f "$APP/LayaDemo"
+          mkdir -p "$RUNNER_TEMP/laya-ipa/Payload"
+          cp -R "$APP" "$RUNNER_TEMP/laya-ipa/Payload/LayaDemo.app"
+          cd "$RUNNER_TEMP/laya-ipa"
+          ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/Laya-Multilingual-iPhone-unsigned.ipa"
+          unzip -tq "$GITHUB_WORKSPACE/Laya-Multilingual-iPhone-unsigned.ipa"
+          ls -lh "$GITHUB_WORKSPACE/Laya-Multilingual-iPhone-unsigned.ipa"
+      - name: Upload unsigned IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Laya-Multilingual-iPhone-unsigned
+          path: Laya-Multilingual-iPhone-unsigned.ipa
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
