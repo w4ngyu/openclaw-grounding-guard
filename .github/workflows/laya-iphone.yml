@@ -3,7 +3,7 @@ name: Build Laya Multilingual iPhone IPA
 on:
   push:
     branches:
-      - laya-iphone-build-20261113
+      - laya-iphone-json-import-20261113
     paths:
       - .github/workflows/laya-iphone.yml
       - 'laya-ios/**'
@@ -25,11 +25,18 @@ jobs:
       - name: Verify repo source files
         run: |
           test -s laya-ios/Sources/LayaDemoApp.swift
+          test -s laya-ios/Sources/DecisionDocumentJSON.swift
+          test -s laya-ios/Sources/DecisionDocumentImportView.swift
           test -f laya-ios/docs/design.md
       - name: Verify Apple build environment
         run: |
           xcodebuild -version
           xcrun --show-sdk-path --sdk iphoneos
+      - name: Test JSON parser and syntax before building native engine
+        run: |
+          swiftc -frontend -parse laya-ios/Sources/LayaDemoApp.swift laya-ios/Sources/DecisionDocumentJSON.swift laya-ios/Sources/DecisionDocumentImportView.swift
+          swiftc laya-ios/Sources/DecisionDocumentJSON.swift laya-ios/Tests/DecisionDocumentJSONTests.swift -o "$RUNNER_TEMP/laya-json-tests"
+          "$RUNNER_TEMP/laya-json-tests"
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -64,7 +71,7 @@ jobs:
           du -sh swift/LayaDemo/Model
       - name: Install editable Chinese decision app UI
         run: |
-          cp laya-ios/Sources/LayaDemoApp.swift laya/swift/LayaDemo/Sources/LayaDemoApp.swift
+          cp laya-ios/Sources/*.swift laya/swift/LayaDemo/Sources/
           python3 - <<'PY'
           from pathlib import Path
           p=Path('laya/swift/LayaDemo/project.yml')
@@ -73,8 +80,11 @@ jobs:
           assert 'CFBundleDisplayName: Laya 决策' in data
           source=Path('laya/swift/LayaDemo/Sources/LayaDemoApp.swift').read_text()
           assert 'DecisionJSONBuilder' in source and 'DecisionHomeView' in source
+          assert 'DecisionDocumentImportView' in source
+          for filename in ('DecisionDocumentJSON.swift', 'DecisionDocumentImportView.swift'):
+              assert Path('laya/swift/LayaDemo/Sources',filename).is_file()
           PY
-          swiftc -frontend -parse laya/swift/LayaDemo/Sources/LayaDemoApp.swift
+          swiftc -frontend -parse laya/swift/LayaDemo/Sources/*.swift
       - name: Generate native SwiftUI iOS project
         working-directory: laya/swift/LayaDemo
         run: xcodegen generate
@@ -101,17 +111,17 @@ jobs:
           mkdir -p "$RUNNER_TEMP/laya-ipa/Payload"
           cp -R "$APP" "$RUNNER_TEMP/laya-ipa/Payload/LayaDemo.app"
           cd "$RUNNER_TEMP/laya-ipa"
-          ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/Laya-Multilingual-iPhone-unsigned.ipa"
-          unzip -tq "$GITHUB_WORKSPACE/Laya-Multilingual-iPhone-unsigned.ipa"
-          ls -lh "$GITHUB_WORKSPACE/Laya-Multilingual-iPhone-unsigned.ipa"
-          shasum -a 256 "$GITHUB_WORKSPACE/Laya-Multilingual-iPhone-unsigned.ipa" > "$GITHUB_WORKSPACE/Laya-Multilingual-iPhone-unsigned.ipa.sha256"
+          ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/Laya-Multilingual-JSON-Decision-iPhone-unsigned.ipa"
+          unzip -tq "$GITHUB_WORKSPACE/Laya-Multilingual-JSON-Decision-iPhone-unsigned.ipa"
+          ls -lh "$GITHUB_WORKSPACE/Laya-Multilingual-JSON-Decision-iPhone-unsigned.ipa"
+          shasum -a 256 "$GITHUB_WORKSPACE/Laya-Multilingual-JSON-Decision-iPhone-unsigned.ipa" > "$GITHUB_WORKSPACE/Laya-Multilingual-JSON-Decision-iPhone-unsigned.ipa.sha256"
       - name: Upload unsigned IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Laya-Multilingual-Chinese-Decision-iPhone-unsigned
+          name: Laya-Multilingual-JSON-Decision-iPhone-unsigned
           path: |
-            Laya-Multilingual-iPhone-unsigned.ipa
-            Laya-Multilingual-iPhone-unsigned.ipa.sha256
+            Laya-Multilingual-JSON-Decision-iPhone-unsigned.ipa
+            Laya-Multilingual-JSON-Decision-iPhone-unsigned.ipa.sha256
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
