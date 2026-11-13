@@ -1,0 +1,135 @@
+name: Build Valen-Decision 1.5 4B iOS IPA
+on:
+  push:
+    branches: [valen-decision-4b-ios-20261113]
+    paths:
+      - 'valen-ios/**'
+      - '.github/workflows/build-valen-4b-ios.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-ios:
+    runs-on: macos-26
+    timeout-minutes: 180
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: '3'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Xcode and tools
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-path
+          brew install xcodegen ninja
+      - name: Fetch audited Valen 0.2.0 patched llama.cpp source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/valen-dist" "$RUNNER_TEMP/valen-src"
+          cd "$RUNNER_TEMP/valen-dist"
+          curl -fL --retry 4 --retry-all-errors \
+            https://github.com/Valen-Team/Valen/releases/download/gguf-runtime-v0.2.0/valen-gguf-runtime-0.2.0-linux-x86_64.tar.gz \
+            -o valen-runtime.tar.gz
+          printf '%s  %s\n' 4b3b6035adbb99f3bb47c75e55804e1f650f96b35b825d95a6cd4ae85ce39537 valen-runtime.tar.gz | shasum -a 256 -c -
+          tar -xzf valen-runtime.tar.gz
+          SRC_TAR=$(find . -name llama-source.tar.gz -type f -print -quit)
+          test -n "$SRC_TAR"
+          tar -xzf "$SRC_TAR" -C "$RUNNER_TEMP/valen-src"
+          SRC_CMAKE=$(find "$RUNNER_TEMP/valen-src" -path '*/tools/server/CMakeLists.txt' -type f -print -quit)
+          test -n "$SRC_CMAKE"
+          SRC_ROOT="${SRC_CMAKE%/tools/server/CMakeLists.txt}"
+          printf '%s\n' "$SRC_ROOT" > "$RUNNER_TEMP/valen-root-path"
+          test -f "$SRC_ROOT/tools/server/server-decision.cpp"
+          echo "Validated native Valen runtime: $SRC_ROOT"
+      - name: Prevent embedded HTTP server from replacing iOS process signals
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          src = Path(os.environ["RUNNER_TEMP"]) / "valen-root-path"
+          p = Path(src.read_text().strip()) / "tools/server/server.cpp"
+          before = "const int result = server_run(params, argc, argv, role, server_run_opts{});"
+          after = "server_run_opts ios_opts; ios_opts.install_signal_handlers = false; const int result = server_run(params, argc, argv, role, ios_opts);"
+          s = p.read_text()
+          assert before in s, "upstream signal handler anchor moved; refusing blind patch"
+          p.write_text(s.replace(before, after, 1))
+          PY
+      - name: Compile full Valen decision server engine for arm64 iOS
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC_ROOT=$(cat "$RUNNER_TEMP/valen-root-path")
+          cmake -S "$SRC_ROOT" -B "$RUNNER_TEMP/valen-ios-build" -G Ninja \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=18.0 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_STANDARD=17 \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DLLAMA_BUILD_SERVER=ON \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_APP=OFF \
+            -DLLAMA_BUILD_UI=OFF \
+            -DLLAMA_USE_PREBUILT_UI=OFF \
+            -DLLAMA_CONNECT=OFF \
+            -DLLAMA_OPENSSL=OFF \
+            -DLLAMA_SUBPROCESS=OFF \
+            -DGGML_METAL=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_RPC=OFF
+          cmake --build "$RUNNER_TEMP/valen-ios-build" --target llama-server-impl --parallel 3
+          mkdir -p valen-ios/Engine
+          find "$RUNNER_TEMP/valen-ios-build" -name '*.a' -type f -print | sort > "$RUNNER_TEMP/valen-libraries.txt"
+          cat "$RUNNER_TEMP/valen-libraries.txt"
+          test -s "$RUNNER_TEMP/valen-libraries.txt"
+          mapfile -t archives < "$RUNNER_TEMP/valen-libraries.txt"
+          libtool -static -o valen-ios/Engine/libValenEngine.a "${archives[@]}"
+          ls -lh valen-ios/Engine/libValenEngine.a
+      - name: Generate native SwiftUI app project
+        working-directory: valen-ios
+        run: xcodegen generate
+      - name: Build unsigned iPhone app
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project valen-ios/ValenDecision.xcodeproj \
+            -scheme ValenDecision \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/valen-derived" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY='' \
+            build | tee "$RUNNER_TEMP/valen-xcodebuild.log"
+      - name: Package IPA and check bundled native engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/valen-derived/Build/Products/Release-iphoneos/ValenDecision.app"
+          test -d "$APP"
+          test -s "$APP/ValenDecision"
+          xcrun lipo -info "$APP/ValenDecision"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist"
+          mkdir -p "$RUNNER_TEMP/valen-package/Payload"
+          ditto "$APP" "$RUNNER_TEMP/valen-package/Payload/ValenDecision.app"
+          (cd "$RUNNER_TEMP/valen-package" && ditto -c -k --sequesterRsrc Payload "$GITHUB_WORKSPACE/Valen-Decision-1.5-4B-iPhone-unsigned.ipa")
+          unzip -tq Valen-Decision-1.5-4B-iPhone-unsigned.ipa
+          shasum -a 256 Valen-Decision-1.5-4B-iPhone-unsigned.ipa > Valen-Decision-1.5-4B-iPhone-unsigned.ipa.sha256
+          ls -lh Valen-Decision-1.5-4B-iPhone-unsigned.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Valen-Decision-1.5-4B-iPhone-unsigned
+          path: |
+            Valen-Decision-1.5-4B-iPhone-unsigned.ipa
+            Valen-Decision-1.5-4B-iPhone-unsigned.ipa.sha256
+          if-no-files-found: error
+          retention-days: 7
