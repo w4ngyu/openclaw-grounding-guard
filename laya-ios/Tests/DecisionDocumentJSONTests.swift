@@ -23,7 +23,8 @@ struct DecisionJSONTests {
         assert(parsed.questions.map(\.kind) == ["choice", "noul", "score"])
         assert(parsed.questions[1].options.isEmpty)
         let exported = try DecisionDocumentJSON.export(parsed)
-        assert(try DecisionDocumentJSON.parse(exported) == parsed)
+        let roundTripped = try DecisionDocumentJSON.parse(exported)
+        assert(roundTripped == parsed)
 
         let object = """
         {
