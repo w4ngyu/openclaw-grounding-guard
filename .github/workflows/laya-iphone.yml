@@ -6,6 +6,7 @@ on:
       - laya-iphone-build-20261113
     paths:
       - .github/workflows/laya-iphone.yml
+      - 'laya-ios/**'
   workflow_dispatch:
 
 permissions:
@@ -56,6 +57,19 @@ jobs:
           test -s swift/LayaDemo/Model/model.safetensors
           test -f swift/LayaDemo/Model/rl_agent_config.json
           du -sh swift/LayaDemo/Model
+      - name: Install editable Chinese decision app UI
+        run: |
+          cp laya-ios/Sources/LayaDemoApp.swift laya/swift/LayaDemo/Sources/LayaDemoApp.swift
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('laya/swift/LayaDemo/project.yml')
+          data=p.read_text().replace('CFBundleDisplayName: Laya Demo', 'CFBundleDisplayName: Laya 决策')
+          p.write_text(data)
+          assert 'CFBundleDisplayName: Laya 决策' in data
+          source=Path('laya/swift/LayaDemo/Sources/LayaDemoApp.swift').read_text()
+          assert 'DecisionJSONBuilder' in source and 'DecisionHomeView' in source
+          PY
+          swiftc -frontend -parse laya/swift/LayaDemo/Sources/LayaDemoApp.swift
       - name: Generate native SwiftUI iOS project
         working-directory: laya/swift/LayaDemo
         run: xcodegen generate
@@ -85,11 +99,14 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/Laya-Multilingual-iPhone-unsigned.ipa"
           unzip -tq "$GITHUB_WORKSPACE/Laya-Multilingual-iPhone-unsigned.ipa"
           ls -lh "$GITHUB_WORKSPACE/Laya-Multilingual-iPhone-unsigned.ipa"
+          shasum -a 256 "$GITHUB_WORKSPACE/Laya-Multilingual-iPhone-unsigned.ipa" > "$GITHUB_WORKSPACE/Laya-Multilingual-iPhone-unsigned.ipa.sha256"
       - name: Upload unsigned IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Laya-Multilingual-iPhone-unsigned
-          path: Laya-Multilingual-iPhone-unsigned.ipa
+          name: Laya-Multilingual-Chinese-Decision-iPhone-unsigned
+          path: |
+            Laya-Multilingual-iPhone-unsigned.ipa
+            Laya-Multilingual-iPhone-unsigned.ipa.sha256
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
